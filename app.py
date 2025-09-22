@@ -82,16 +82,24 @@ class EnhancedSERPAnalyzer:
         self.content_cache = {}
         self.structured_data_cache = {}
         self.use_ai = True
-        self.batch_size = 5
+        self.batch_size = 8  # Aumentato per batch più grandi
         
-        # Headers per web scraping
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-        }
+        # Pool di User Agents per rotation
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+        ]
+        self.current_ua_index = 0
+        
+        # Sessione per mantenere cookies e connessioni
+        self.session = requests.Session()
+        self.session.verify = False  # Disabilita SSL verification per velocità
+        
+        # Thread pool executor per operazioni parallele
+        self.executor = ThreadPoolExecutor(max_workers=4)
 
     def fetch_serp_results(self, query, country="it", language="it", num_results=10):
         """Effettua la ricerca SERP tramite SERPApi"""
@@ -116,26 +124,93 @@ class EnhancedSERPAnalyzer:
             st.error(f"Errore di connessione: {e}")
             return None
 
-    def fetch_page_content(self, url, timeout=10):
-        """Fetcha il contenuto di una pagina web"""
+    def get_headers(self):
+        """Genera headers realistici con user agent rotation"""
+        self.current_ua_index = (self.current_ua_index + 1) % len(self.user_agents)
+        ua = self.user_agents[self.current_ua_index]
+        
+        return {
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
+            'DNT': '1',
+        }
+
+    def fetch_page_content(self, url, timeout=8, max_retries=3):
+        """Fetcha il contenuto di una pagina web con retry logic migliorato"""
         if url in self.content_cache:
             return self.content_cache[url]
         
-        try:
-            response = requests.get(url, headers=self.headers, timeout=timeout)
-            if response.status_code == 200:
-                content = {
-                    'url': url,
-                    'html': response.text,
-                    'status_code': response.status_code,
-                    'headers': dict(response.headers)
-                }
-                self.content_cache[url] = content
-                return content
-            else:
-                return {'url': url, 'html': '', 'status_code': response.status_code, 'error': f'HTTP {response.status_code}'}
-        except requests.RequestException as e:
-            return {'url': url, 'html': '', 'status_code': 0, 'error': str(e)}
+        for attempt in range(max_retries):
+            try:
+                headers = self.get_headers()
+                
+                # Aggiungi delay progressivo per evitare rate limiting
+                if attempt > 0:
+                    time.sleep(min(attempt * 0.5, 2))
+                
+                response = self.session.get(
+                    url, 
+                    headers=headers, 
+                    timeout=timeout,
+                    allow_redirects=True,
+                    stream=False
+                )
+                
+                if response.status_code == 200:
+                    content = {
+                        'url': url,
+                        'html': response.text,
+                        'status_code': response.status_code,
+                        'headers': dict(response.headers)
+                    }
+                    self.content_cache[url] = content
+                    return content
+                    
+                elif response.status_code in [403, 429]:
+                    # Rate limited o bloccato, prova con headers diversi
+                    continue
+                elif response.status_code in [404, 410]:
+                    # Pagina non trovata, non serve ritentare
+                    break
+                    
+            except requests.RequestException as e:
+                if attempt == max_retries - 1:
+                    return {'url': url, 'html': '', 'status_code': 0, 'error': str(e)}
+                continue
+        
+        return {'url': url, 'html': '', 'status_code': response.status_code if 'response' in locals() else 0, 'error': f'Failed after {max_retries} attempts'}
+
+    def fetch_multiple_pages_parallel(self, urls, max_workers=4):
+        """Fetcha multiple pagine in parallelo per velocizzare il processo"""
+        results = {}
+        
+        def fetch_single(url):
+            try:
+                return url, self.fetch_page_content(url)
+            except Exception as e:
+                return url, {'url': url, 'html': '', 'status_code': 0, 'error': str(e)}
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_url = {executor.submit(fetch_single, url): url for url in urls}
+            
+            for future in as_completed(future_to_url):
+                try:
+                    url, result = future.result()
+                    results[url] = result
+                except Exception as e:
+                    url = future_to_url[future]
+                    results[url] = {'url': url, 'html': '', 'status_code': 0, 'error': str(e)}
+        
+        return results
 
     def extract_structured_data(self, html_content, url):
         """Estrae dati strutturati da una pagina HTML"""
