@@ -347,7 +347,7 @@ Rispondi solo con la categoria."""
             return "Altro"
 
     def parse_ai_overview(self, data):
-        """Estrae informazioni dall'AI Overview con gestione robusta di tutte le varianti"""
+        """Estrae informazioni dall'AI Overview secondo la documentazione SERPApi"""
         ai_overview_info = {
             "has_ai_overview": False,
             "ai_overview_text": "",
@@ -358,115 +358,61 @@ Rispondi solo con la categoria."""
             "own_site_ai_position": None
         }
         
-        # Debug: salva la struttura per debugging
-        debug_info = {
-            "has_ai_overview_key": "ai_overview" in data,
-            "has_answer_box": "answer_box" in data,
-            "has_featured_snippet": "featured_snippet" in data,
-            "all_keys": list(data.keys())
-        }
-        
-        # Metodo 1: AI Overview standard
-        if "ai_overview" in data and data["ai_overview"]:
+        # Controlla se c'è AI Overview embedded nei risultati
+        if "ai_overview" in data:
             ai_data = data["ai_overview"]
             ai_overview_info["has_ai_overview"] = True
             
-            # Estrai testo con multiple strategie
-            text_parts = []
-            
-            # Strategia A: text_blocks (formato standard)
-            if isinstance(ai_data, dict) and "text_blocks" in ai_data:
+            # Estrai testo dai text_blocks
+            if "text_blocks" in ai_data:
+                text_parts = []
                 for block in ai_data["text_blocks"]:
-                    if isinstance(block, dict):
-                        if "snippet" in block:
-                            text_parts.append(block["snippet"])
-                        elif "text" in block:
-                            text_parts.append(block["text"])
-                        
-                        # Gestisci liste annidate
-                        if block.get("type") == "list" and "list" in block:
-                            for item in block["list"]:
-                                if isinstance(item, dict):
-                                    if "title" in item:
-                                        text_parts.append(f"• {item['title']}")
-                                    if "snippet" in item:
-                                        text_parts.append(f"  {item['snippet']}")
-            
-            # Strategia B: testo diretto
-            elif isinstance(ai_data, dict):
-                for key in ["snippet", "text", "answer", "description"]:
-                    if key in ai_data and ai_data[key]:
-                        text_parts.append(str(ai_data[key]))
-            
-            # Strategia C: se ai_data è una stringa
-            elif isinstance(ai_data, str):
-                text_parts.append(ai_data)
-            
-            ai_overview_info["ai_overview_text"] = " ".join(text_parts)
-            
-            # Estrai fonti con multiple strategie
-            sources_found = []
-            
-            # Strategia A: references standard
-            if isinstance(ai_data, dict) and "references" in ai_data:
-                if isinstance(ai_data["references"], list):
-                    sources_found = ai_data["references"]
-            
-            # Strategia B: sources alternative
-            elif isinstance(ai_data, dict):
-                for sources_key in ["sources", "links", "citations"]:
-                    if sources_key in ai_data and isinstance(ai_data[sources_key], list):
-                        sources_found = ai_data[sources_key]
-                        break
-            
-            # Processa le fonti trovate
-            for i, ref in enumerate(sources_found):
-                if isinstance(ref, dict):
-                    # Estrai link con multiple strategie
-                    link = ref.get("link") or ref.get("url") or ref.get("href") or ""
+                    if "snippet" in block:
+                        text_parts.append(block["snippet"])
                     
+                    # Se è una lista, estrai anche gli elementi
+                    if block.get("type") == "list" and "list" in block:
+                        for item in block["list"]:
+                            if "title" in item:
+                                text_parts.append(f"• {item['title']}")
+                            if "snippet" in item:
+                                text_parts.append(f"  {item['snippet']}")
+                
+                ai_overview_info["ai_overview_text"] = " ".join(text_parts)
+            
+            # Estrai references (fonti) e controlla il proprio sito
+            if "references" in ai_data:
+                for i, ref in enumerate(ai_data["references"]):
                     source_info = {
-                        "title": ref.get("title") or ref.get("name") or "",
-                        "link": link,
-                        "domain": urlparse(link).netloc if link else "",
-                        "source": ref.get("source") or ref.get("domain") or "",
-                        "snippet": ref.get("snippet") or ref.get("description") or "",
+                        "title": ref.get("title", ""),
+                        "link": ref.get("link", ""),
+                        "domain": urlparse(ref.get("link", "")).netloc if ref.get("link") else "",
+                        "source": ref.get("source", ""),
+                        "snippet": ref.get("snippet", ""),
                         "position": i + 1
                     }
-                    
                     ai_overview_info["ai_sources"].append(source_info)
                     if source_info["domain"]:
                         ai_overview_info["ai_source_domains"].append(source_info["domain"])
                     
-                    # Controlla il proprio sito
+                    # Controlla se il proprio sito è presente
                     if self.own_site_domain and self.own_site_domain in source_info["domain"]:
                         ai_overview_info["own_site_in_ai"] = True
                         if ai_overview_info["own_site_ai_position"] is None:
                             ai_overview_info["own_site_ai_position"] = i + 1
         
-        # Metodo 2: Answer Box come AI Overview alternativo
-        elif "answer_box" in data and data["answer_box"]:
+        # Fallback: cerca in answer_box come AI Overview alternativo
+        if not ai_overview_info["has_ai_overview"] and "answer_box" in data:
             answer_box = data["answer_box"]
             if isinstance(answer_box, dict):
                 ai_overview_info["has_ai_overview"] = True
+                ai_overview_info["ai_overview_text"] = str(answer_box.get("snippet", answer_box.get("answer", "")))
                 
-                # Estrai testo dall'answer box
-                text_content = (
-                    answer_box.get("snippet") or 
-                    answer_box.get("answer") or 
-                    answer_box.get("text") or 
-                    ""
-                )
-                ai_overview_info["ai_overview_text"] = str(text_content)
-                
-                # Estrai fonte dall'answer box
-                if answer_box.get("link"):
+                if "link" in answer_box:
                     source_info = {
-                        "title": answer_box.get("title") or "",
-                        "link": answer_box.get("link"),
-                        "domain": urlparse(answer_box.get("link", "")).netloc,
-                        "source": answer_box.get("displayed_link") or "",
-                        "snippet": text_content,
+                        "title": answer_box.get("title", ""),
+                        "link": answer_box.get("link", ""),
+                        "domain": urlparse(answer_box.get("link", "")).netloc if answer_box.get("link") else "",
                         "position": 1
                     }
                     ai_overview_info["ai_sources"].append(source_info)
@@ -477,50 +423,6 @@ Rispondi solo con la categoria."""
                     if self.own_site_domain and self.own_site_domain in source_info["domain"]:
                         ai_overview_info["own_site_in_ai"] = True
                         ai_overview_info["own_site_ai_position"] = 1
-        
-        # Metodo 3: Featured Snippet come alternativo
-        elif "featured_snippet" in data and data["featured_snippet"]:
-            featured = data["featured_snippet"]
-            if isinstance(featured, dict):
-                ai_overview_info["has_ai_overview"] = True
-                
-                text_content = (
-                    featured.get("snippet") or 
-                    featured.get("text") or 
-                    ""
-                )
-                ai_overview_info["ai_overview_text"] = str(text_content)
-                
-                if featured.get("link"):
-                    source_info = {
-                        "title": featured.get("title") or "",
-                        "link": featured.get("link"),
-                        "domain": urlparse(featured.get("link", "")).netloc,
-                        "source": featured.get("displayed_link") or "",
-                        "snippet": text_content,
-                        "position": 1
-                    }
-                    ai_overview_info["ai_sources"].append(source_info)
-                    if source_info["domain"]:
-                        ai_overview_info["ai_source_domains"].append(source_info["domain"])
-                    
-                    if self.own_site_domain and self.own_site_domain in source_info["domain"]:
-                        ai_overview_info["own_site_in_ai"] = True
-                        ai_overview_info["own_site_ai_position"] = 1
-        
-        # Log di debug se non trova AI Overview ma dovrebbe esserci
-        if not ai_overview_info["has_ai_overview"]:
-            # Controlla se ci sono indicatori che suggeriscono la presenza di AI content
-            potential_ai_keys = [
-                "knowledge_graph", "answer_box", "featured_snippet", 
-                "ai_overview", "instant_answer", "direct_answer"
-            ]
-            found_keys = [key for key in potential_ai_keys if key in data and data[key]]
-            
-            if found_keys:
-                # Potrebbe esserci contenuto AI che non stiamo rilevando
-                # Log per debugging futuro (solo in development)
-                debug_info["potential_ai_keys_found"] = found_keys
         
         return ai_overview_info
 
