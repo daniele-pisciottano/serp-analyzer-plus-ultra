@@ -372,7 +372,7 @@ Rispondi solo con la categoria."""
             st.warning(f"Errore OpenAI: {e}")
             return "Altro"
 
-        def parse_ai_overview(self, data, query=None, country="it", language="it", depth=0, max_depth=5):
+    def parse_ai_overview(self, data, query=None, country="it", language="it", depth=0, max_depth=5):
         """Estrae informazioni dall'AI Overview secondo la documentazione SERPApi"""
         ai_overview_info = {
             "has_ai_overview": False,
