@@ -116,6 +116,29 @@ class EnhancedSERPAnalyzer:
             st.error(f"Errore di connessione: {e}")
             return None
 
+    def fetch_ai_overview_with_token(self, query, page_token, country="it", language="it"):
+        """Recupera AI Overview completo usando il page_token"""
+        params = {
+            "api_key": self.serpapi_key,
+            "engine": "google",
+            "q": query,
+            "gl": country,
+            "hl": language,
+            "google_domain": "google.it" if country == "it" else "google.com",
+            "page_token": page_token  # Il token per recuperare l'AI Overview completo
+        }
+        
+        try:
+            response = requests.get(self.serpapi_url, params=params)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                st.warning(f"Errore nel recupero AI Overview con token per '{query}': {response.status_code}")
+                return None
+        except Exception as e:
+            st.warning(f"Errore di connessione per AI Overview: {e}")
+            return None
+
     def fetch_page_content(self, url, timeout=10):
         """Fetcha il contenuto di una pagina web"""
         if url in self.content_cache:
@@ -346,7 +369,7 @@ Rispondi solo con la categoria."""
             st.warning(f"Errore OpenAI: {e}")
             return "Altro"
 
-    def parse_ai_overview(self, data):
+    def parse_ai_overview(self, data, query=None, country="it", language="it"):
         """Estrae informazioni dall'AI Overview secondo la documentazione SERPApi"""
         ai_overview_info = {
             "has_ai_overview": False,
@@ -362,6 +385,22 @@ Rispondi solo con la categoria."""
         if "ai_overview" in data:
             ai_data = data["ai_overview"]
             ai_overview_info["has_ai_overview"] = True
+            
+            # Controlla se c'è un page_token (richiede richiesta aggiuntiva)
+            if "page_token" in ai_data and query:
+                ai_overview_info["page_token"] = ai_data["page_token"]
+                
+                # Fai richiesta aggiuntiva per ottenere AI Overview completo
+                full_ai_data = self.fetch_ai_overview_with_token(
+                    query, 
+                    ai_data["page_token"], 
+                    country, 
+                    language
+                )
+                
+                # Se la richiesta ha successo, usa i dati completi
+                if full_ai_data and "ai_overview" in full_ai_data:
+                    ai_data = full_ai_data["ai_overview"]
             
             # Estrai testo dai text_blocks
             if "text_blocks" in ai_data:
@@ -529,7 +568,7 @@ Rispondi solo con la categoria."""
         
         return structured_data_results
 
-    def parse_results(self, data, query):
+    def parse_results(self, data, query, country="it", language="it"):
         """Analizza i risultati SERP con tutte le nuove funzionalità"""
         domain_page_types = defaultdict(lambda: defaultdict(int))
         domain_occurences = defaultdict(int)
@@ -551,8 +590,8 @@ Rispondi solo con la categoria."""
         pages_to_classify = []
         pages_info = []
         
-        # Analizza AI Overview con nuove funzionalità
-        ai_overview_info = self.parse_ai_overview(data)
+        # Analizza AI Overview con nuove funzionalità - passa query, country e language
+        ai_overview_info = self.parse_ai_overview(data, query, country, language)
         
         # Analizza risultati organici
         organic_results = data.get("organic_results", [])
@@ -1366,6 +1405,7 @@ def main():
         • 📈 Grafici Excel integrati
         • 🎯 Report keyword unificato
         • 🏗️ Cluster personalizzati
+        • 🔗 Supporto page_token per AI Overview completi
         """)
 
     # Mostra risultati se l'analisi è stata completata
@@ -1493,11 +1533,11 @@ def run_analysis(queries, serpapi_key, openai_api_key, own_site_domain,
         results = analyzer.fetch_serp_results(query, country, language, num_results)
         
         if results:
-            # Parse risultati base
+            # Parse risultati base - passa country e language
             (domain_page_types_query, domain_occurences_query, query_page_types_query,
              paa_questions_query, related_queries_query, paa_to_queries_query,
              related_to_queries_query, paa_to_domains_query, ai_overview_info, 
-             own_site_data, organic_results) = analyzer.parse_results(results, query)
+             own_site_data, organic_results) = analyzer.parse_results(results, query, country, language)
             
             # Salva dati base
             ai_overview_data[query] = ai_overview_info
