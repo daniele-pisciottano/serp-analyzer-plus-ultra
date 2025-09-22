@@ -125,21 +125,16 @@ class EnhancedSERPAnalyzer:
             "gl": country,
             "hl": language,
             "google_domain": "google.it" if country == "it" else "google.com",
-            "page_token": page_token  # Il token per recuperare l'AI Overview completo
+            "page_token": page_token
         }
         
         try:
             response = requests.get(self.serpapi_url, params=params)
             if response.status_code == 200:
-                result = response.json()
-                # DEBUG
-                st.write(f"    - Risposta page_token ricevuta, chiavi: {list(result.keys())}")
-                return result
+                return response.json()
             else:
-                st.warning(f"Errore nel recupero AI Overview con token per '{query}': {response.status_code}")
                 return None
         except Exception as e:
-            st.warning(f"Errore di connessione per AI Overview: {e}")
             return None
 
     def fetch_page_content(self, url, timeout=10):
@@ -372,8 +367,8 @@ Rispondi solo con la categoria."""
             st.warning(f"Errore OpenAI: {e}")
             return "Altro"
 
-    def parse_ai_overview(self, data, query=None, country="it", language="it", depth=0, max_depth=5):
-        """Estrae informazioni dall'AI Overview secondo la documentazione SERPApi"""
+    def parse_ai_overview(self, data, query=None, country="it", language="it"):
+        """Estrae informazioni dall'AI Overview seguendo i page_token fino ai dati finali"""
         ai_overview_info = {
             "has_ai_overview": False,
             "ai_overview_text": "",
@@ -384,69 +379,44 @@ Rispondi solo con la categoria."""
             "own_site_ai_position": None
         }
         
-        # DEBUG: Log per capire la struttura della risposta
-        if query and depth == 0:
-            st.write(f"🔍 DEBUG per query '{query}':")
-        
         # Controlla se c'è AI Overview embedded nei risultati
         if "ai_overview" in data:
             ai_data = data["ai_overview"]
             ai_overview_info["has_ai_overview"] = True
             
-            # DEBUG: Mostra la struttura dell'AI Overview
-            if query:
-                indent = "  " * (depth + 1)
-                if depth == 0:
-                    st.write(f"{indent}- AI Overview trovato")
-                st.write(f"{indent}- Chiavi presenti: {list(ai_data.keys())}")
-                if "page_token" in ai_data:
-                    st.write(f"{indent}- Page token presente: {ai_data['page_token'][:20]}...")
-            
-            # Controlla se ci sono già i dati (text_blocks o references)
-            has_content = "text_blocks" in ai_data or "references" in ai_data
-            
-            # Se c'è un page_token E NON ci sono ancora i contenuti, fai richiesta aggiuntiva
-            if "page_token" in ai_data and query and not has_content and depth < max_depth:
-                ai_overview_info["page_token"] = ai_data["page_token"]
+            # Se ci sono già text_blocks o references, usa quelli
+            if "text_blocks" in ai_data or "references" in ai_data:
+                # Abbiamo i dati, processiamoli
+                pass
+            # Altrimenti, se c'è un page_token, segui la catena
+            elif "page_token" in ai_data and query:
+                max_attempts = 10  # Limite di sicurezza
+                attempts = 0
                 
-                # DEBUG
-                indent = "  " * (depth + 1)
-                st.write(f"{indent}- Facendo richiesta aggiuntiva con page_token (depth={depth+1})...")
-                
-                # Fai richiesta aggiuntiva per ottenere AI Overview completo
-                full_ai_data = self.fetch_ai_overview_with_token(
-                    query, 
-                    ai_data["page_token"], 
-                    country, 
-                    language
-                )
-                
-                # Se la richiesta ha successo, processa ricorsivamente
-                if full_ai_data:
-                    st.write(f"{indent}- Richiesta con page_token completata")
+                while "page_token" in ai_data and attempts < max_attempts:
+                    attempts += 1
+                    page_token = ai_data["page_token"]
                     
-                    # Chiamata RICORSIVA per gestire page_token multipli
-                    recursive_result = self.parse_ai_overview(
-                        full_ai_data, 
+                    # Fai richiesta con page_token
+                    full_data = self.fetch_ai_overview_with_token(
                         query, 
+                        page_token, 
                         country, 
-                        language,
-                        depth=depth+1,
-                        max_depth=max_depth
+                        language
                     )
                     
-                    # Se la chiamata ricorsiva ha trovato i dati, usali
-                    if recursive_result["ai_overview_text"] or recursive_result["ai_sources"]:
-                        return recursive_result
+                    if full_data and "ai_overview" in full_data:
+                        ai_data = full_data["ai_overview"]
+                        
+                        # Se ora abbiamo i dati, esci dal loop
+                        if "text_blocks" in ai_data or "references" in ai_data:
+                            break
                     else:
-                        # Altrimenti continua con i dati attuali (potrebbero essere incompleti)
-                        if "ai_overview" in full_ai_data:
-                            ai_data = full_ai_data["ai_overview"]
-                            
-            elif depth >= max_depth and query:
-                st.warning(f"  - ⚠️ Raggiunto limite massimo di profondità ({max_depth}) per la query '{query}'")
+                        # Errore nella richiesta, esci
+                        break
             
-            # Estrai testo dai text_blocks (se presenti)
+            # Ora processiamo i dati (se li abbiamo)
+            # Estrai testo dai text_blocks
             if "text_blocks" in ai_data:
                 text_parts = []
                 for block in ai_data["text_blocks"]:
@@ -462,17 +432,9 @@ Rispondi solo con la categoria."""
                                 text_parts.append(f"  {item['snippet']}")
                 
                 ai_overview_info["ai_overview_text"] = " ".join(text_parts)
-                
-                # DEBUG
-                if query and depth == 0:
-                    st.write(f"  - Text blocks trovati: {len(text_parts)} parti di testo")
             
-            # Estrai references (fonti) e controlla il proprio sito
+            # Estrai references (fonti)
             if "references" in ai_data:
-                # DEBUG
-                if query and depth == 0:
-                    st.write(f"  - References trovati: {len(ai_data['references'])} fonti")
-                    
                 for i, ref in enumerate(ai_data["references"]):
                     source_info = {
                         "title": ref.get("title", ""),
@@ -491,25 +453,11 @@ Rispondi solo con la categoria."""
                         ai_overview_info["own_site_in_ai"] = True
                         if ai_overview_info["own_site_ai_position"] is None:
                             ai_overview_info["own_site_ai_position"] = i + 1
-            else:
-                # DEBUG solo al livello principale
-                if query and depth == 0 and ai_overview_info["has_ai_overview"]:
-                    st.write(f"  - ⚠️ Nessun 'references' trovato nell'AI Overview")
-                        
-            # DEBUG: Se non ci sono fonti ma c'è AI Overview (solo al livello principale)
-            if query and depth == 0 and ai_overview_info["has_ai_overview"] and len(ai_overview_info["ai_sources"]) == 0:
-                st.write(f"  - ⚠️ PROBLEMA: AI Overview presente ma nessuna fonte trovata dopo {depth+1} tentativi")
-                if "page_token" in ai_data:
-                    st.write(f"  - Nota: C'è ancora un page_token non risolto")
         
-        # Fallback: cerca in answer_box come AI Overview alternativo (solo al livello principale)
-        if not ai_overview_info["has_ai_overview"] and "answer_box" in data and depth == 0:
+        # Fallback: cerca in answer_box come AI Overview alternativo
+        if not ai_overview_info["has_ai_overview"] and "answer_box" in data:
             answer_box = data["answer_box"]
             if isinstance(answer_box, dict):
-                # DEBUG
-                if query:
-                    st.write(f"  - AI Overview trovato in answer_box")
-                    
                 ai_overview_info["has_ai_overview"] = True
                 ai_overview_info["ai_overview_text"] = str(answer_box.get("snippet", answer_box.get("answer", "")))
                 
@@ -1425,7 +1373,7 @@ def main():
     # Opzioni per analisi avanzate
     enable_ai_overview_analysis = st.sidebar.checkbox(
         "Analizza pagine in AI Overview",
-        value=False,
+        value=True,
         help="Analizza il contenuto delle pagine che appaiono in AI Overview"
     )
     
@@ -1463,22 +1411,21 @@ def main():
     with col2:
         st.markdown("### 💡 Funzionalità")
         st.info("""
-        ✨ **Versione Debug:**
+        ✨ **Versione 2.1:**
         • 🏠 Tracking del tuo sito
-        • 🤖 Analisi AI Overview  
+        • 🤖 AI Overview completi con loop page_token
         • 📊 Dati strutturati SERP
         • 🔍 Suggerimenti AI per ottimizzazione
         • 📈 Grafici Excel integrati
         • 🎯 Report keyword unificato
         • 🏗️ Cluster personalizzati
-        • 🔗 Debug page_token attivato
         """)
 
     # Mostra risultati se l'analisi è stata completata
     if st.session_state.analysis_complete and st.session_state.analysis_data:
         display_results(st.session_state.analysis_data)
     
-    if st.button("🚀 Avvia Analisi con Debug", type="primary", use_container_width=True):
+    if st.button("🚀 Avvia Analisi Avanzata", type="primary", use_container_width=True):
         if use_ai_classification and (not serpapi_key or not openai_api_key):
             st.error("⚠️ Inserisci entrambe le API keys per l'analisi AI!")
             return
@@ -1515,7 +1462,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>🚀 SERP Analyzer Plus Ultra (Debug Mode) - Sviluppato da Daniele e il suo amico Claude 🦕</p>
+        <p>🚀 SERP Analyzer Plus Ultra - Sviluppato da Daniele e il suo amico Claude 🦕</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1591,9 +1538,6 @@ def run_analysis(queries, serpapi_key, openai_api_key, own_site_domain,
 
     progress_bar = st.progress(0)
     status_text = st.empty()
-
-    st.markdown("---")
-    st.subheader("📋 Log di Debug")
 
     for i, query in enumerate(queries):
         status_text.text(f"🔍 Analizzando: {query} ({i+1}/{len(queries)})")
