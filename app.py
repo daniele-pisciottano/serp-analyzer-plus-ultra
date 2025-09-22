@@ -117,30 +117,30 @@ class EnhancedSERPAnalyzer:
             return None
 
     def fetch_ai_overview_with_token(self, query, page_token, country="it", language="it"):
-    """Recupera AI Overview completo usando il page_token"""
-    params = {
-        "api_key": self.serpapi_key,
-        "engine": "google",
-        "q": query,
-        "gl": country,
-        "hl": language,
-        "google_domain": "google.it" if country == "it" else "google.com",
-        "page_token": page_token  # Il token per recuperare l'AI Overview completo
-    }
-    
-    try:
-        response = requests.get(self.serpapi_url, params=params)
-        if response.status_code == 200:
-            result = response.json()
-            # DEBUG
-            st.write(f"    - Risposta page_token ricevuta, chiavi: {list(result.keys())}")
-            return result
-        else:
-            st.warning(f"Errore nel recupero AI Overview con token per '{query}': {response.status_code}")
+        """Recupera AI Overview completo usando il page_token"""
+        params = {
+            "api_key": self.serpapi_key,
+            "engine": "google",
+            "q": query,
+            "gl": country,
+            "hl": language,
+            "google_domain": "google.it" if country == "it" else "google.com",
+            "page_token": page_token  # Il token per recuperare l'AI Overview completo
+        }
+        
+        try:
+            response = requests.get(self.serpapi_url, params=params)
+            if response.status_code == 200:
+                result = response.json()
+                # DEBUG
+                st.write(f"    - Risposta page_token ricevuta, chiavi: {list(result.keys())}")
+                return result
+            else:
+                st.warning(f"Errore nel recupero AI Overview con token per '{query}': {response.status_code}")
+                return None
+        except Exception as e:
+            st.warning(f"Errore di connessione per AI Overview: {e}")
             return None
-    except Exception as e:
-        st.warning(f"Errore di connessione per AI Overview: {e}")
-        return None
 
     def fetch_page_content(self, url, timeout=10):
         """Fetcha il contenuto di una pagina web"""
@@ -373,142 +373,142 @@ Rispondi solo con la categoria."""
             return "Altro"
 
     def parse_ai_overview(self, data, query=None, country="it", language="it"):
-    """Estrae informazioni dall'AI Overview secondo la documentazione SERPApi"""
-    ai_overview_info = {
-        "has_ai_overview": False,
-        "ai_overview_text": "",
-        "ai_sources": [],
-        "ai_source_domains": [],
-        "page_token": None,
-        "own_site_in_ai": False,
-        "own_site_ai_position": None
-    }
-    
-    # DEBUG: Log per capire la struttura della risposta
-    if query:
-        st.write(f"🔍 DEBUG per query '{query}':")
+        """Estrae informazioni dall'AI Overview secondo la documentazione SERPApi"""
+        ai_overview_info = {
+            "has_ai_overview": False,
+            "ai_overview_text": "",
+            "ai_sources": [],
+            "ai_source_domains": [],
+            "page_token": None,
+            "own_site_in_ai": False,
+            "own_site_ai_position": None
+        }
         
-    # Controlla se c'è AI Overview embedded nei risultati
-    if "ai_overview" in data:
-        ai_data = data["ai_overview"]
-        ai_overview_info["has_ai_overview"] = True
-        
-        # DEBUG: Mostra la struttura dell'AI Overview
+        # DEBUG: Log per capire la struttura della risposta
         if query:
-            st.write(f"  - AI Overview trovato")
-            st.write(f"  - Chiavi presenti: {list(ai_data.keys())}")
-            if "page_token" in ai_data:
-                st.write(f"  - Page token presente: {ai_data['page_token'][:20]}...")
-        
-        # Controlla se c'è un page_token (richiede richiesta aggiuntiva)
-        if "page_token" in ai_data and query:
-            ai_overview_info["page_token"] = ai_data["page_token"]
+            st.write(f"🔍 DEBUG per query '{query}':")
             
-            # DEBUG
-            st.write(f"  - Facendo richiesta aggiuntiva con page_token...")
-            
-            # Fai richiesta aggiuntiva per ottenere AI Overview completo
-            full_ai_data = self.fetch_ai_overview_with_token(
-                query, 
-                ai_data["page_token"], 
-                country, 
-                language
-            )
-            
-            # Se la richiesta ha successo, usa i dati completi
-            if full_ai_data:
-                # DEBUG
-                st.write(f"  - Richiesta con page_token completata")
-                if "ai_overview" in full_ai_data:
-                    ai_data = full_ai_data["ai_overview"]
-                    st.write(f"  - Nuove chiavi AI Overview: {list(ai_data.keys())}")
-                else:
-                    st.write(f"  - Nessun ai_overview nella risposta con page_token")
-                    st.write(f"  - Chiavi nella risposta: {list(full_ai_data.keys())}")
-        
-        # Estrai testo dai text_blocks
-        if "text_blocks" in ai_data:
-            text_parts = []
-            for block in ai_data["text_blocks"]:
-                if "snippet" in block:
-                    text_parts.append(block["snippet"])
-                
-                # Se è una lista, estrai anche gli elementi
-                if block.get("type") == "list" and "list" in block:
-                    for item in block["list"]:
-                        if "title" in item:
-                            text_parts.append(f"• {item['title']}")
-                        if "snippet" in item:
-                            text_parts.append(f"  {item['snippet']}")
-            
-            ai_overview_info["ai_overview_text"] = " ".join(text_parts)
-            
-            # DEBUG
-            if query:
-                st.write(f"  - Text blocks trovati: {len(text_parts)} parti di testo")
-        
-        # Estrai references (fonti) e controlla il proprio sito
-        if "references" in ai_data:
-            # DEBUG
-            if query:
-                st.write(f"  - References trovati: {len(ai_data['references'])} fonti")
-                
-            for i, ref in enumerate(ai_data["references"]):
-                source_info = {
-                    "title": ref.get("title", ""),
-                    "link": ref.get("link", ""),
-                    "domain": urlparse(ref.get("link", "")).netloc if ref.get("link") else "",
-                    "source": ref.get("source", ""),
-                    "snippet": ref.get("snippet", ""),
-                    "position": i + 1
-                }
-                ai_overview_info["ai_sources"].append(source_info)
-                if source_info["domain"]:
-                    ai_overview_info["ai_source_domains"].append(source_info["domain"])
-                
-                # Controlla se il proprio sito è presente
-                if self.own_site_domain and self.own_site_domain in source_info["domain"]:
-                    ai_overview_info["own_site_in_ai"] = True
-                    if ai_overview_info["own_site_ai_position"] is None:
-                        ai_overview_info["own_site_ai_position"] = i + 1
-        else:
-            # DEBUG
-            if query:
-                st.write(f"  - ⚠️ Nessun 'references' trovato nell'AI Overview")
-                
-        # DEBUG: Se non ci sono fonti ma c'è AI Overview
-        if query and ai_overview_info["has_ai_overview"] and len(ai_overview_info["ai_sources"]) == 0:
-            st.write(f"  - ⚠️ PROBLEMA: AI Overview presente ma nessuna fonte trovata")
-            st.write(f"  - Struttura completa ai_data (prime 500 char): {str(ai_data)[:500]}")
-    
-    # Fallback: cerca in answer_box come AI Overview alternativo
-    if not ai_overview_info["has_ai_overview"] and "answer_box" in data:
-        answer_box = data["answer_box"]
-        if isinstance(answer_box, dict):
-            # DEBUG
-            if query:
-                st.write(f"  - AI Overview trovato in answer_box")
-                
+        # Controlla se c'è AI Overview embedded nei risultati
+        if "ai_overview" in data:
+            ai_data = data["ai_overview"]
             ai_overview_info["has_ai_overview"] = True
-            ai_overview_info["ai_overview_text"] = str(answer_box.get("snippet", answer_box.get("answer", "")))
             
-            if "link" in answer_box:
-                source_info = {
-                    "title": answer_box.get("title", ""),
-                    "link": answer_box.get("link", ""),
-                    "domain": urlparse(answer_box.get("link", "")).netloc if answer_box.get("link") else "",
-                    "position": 1
-                }
-                ai_overview_info["ai_sources"].append(source_info)
-                if source_info["domain"]:
-                    ai_overview_info["ai_source_domains"].append(source_info["domain"])
+            # DEBUG: Mostra la struttura dell'AI Overview
+            if query:
+                st.write(f"  - AI Overview trovato")
+                st.write(f"  - Chiavi presenti: {list(ai_data.keys())}")
+                if "page_token" in ai_data:
+                    st.write(f"  - Page token presente: {ai_data['page_token'][:20]}...")
+            
+            # Controlla se c'è un page_token (richiede richiesta aggiuntiva)
+            if "page_token" in ai_data and query:
+                ai_overview_info["page_token"] = ai_data["page_token"]
                 
-                # Controlla il proprio sito
-                if self.own_site_domain and self.own_site_domain in source_info["domain"]:
-                    ai_overview_info["own_site_in_ai"] = True
-                    ai_overview_info["own_site_ai_position"] = 1
-    
-    return ai_overview_info
+                # DEBUG
+                st.write(f"  - Facendo richiesta aggiuntiva con page_token...")
+                
+                # Fai richiesta aggiuntiva per ottenere AI Overview completo
+                full_ai_data = self.fetch_ai_overview_with_token(
+                    query, 
+                    ai_data["page_token"], 
+                    country, 
+                    language
+                )
+                
+                # Se la richiesta ha successo, usa i dati completi
+                if full_ai_data:
+                    # DEBUG
+                    st.write(f"  - Richiesta con page_token completata")
+                    if "ai_overview" in full_ai_data:
+                        ai_data = full_ai_data["ai_overview"]
+                        st.write(f"  - Nuove chiavi AI Overview: {list(ai_data.keys())}")
+                    else:
+                        st.write(f"  - Nessun ai_overview nella risposta con page_token")
+                        st.write(f"  - Chiavi nella risposta: {list(full_ai_data.keys())}")
+            
+            # Estrai testo dai text_blocks
+            if "text_blocks" in ai_data:
+                text_parts = []
+                for block in ai_data["text_blocks"]:
+                    if "snippet" in block:
+                        text_parts.append(block["snippet"])
+                    
+                    # Se è una lista, estrai anche gli elementi
+                    if block.get("type") == "list" and "list" in block:
+                        for item in block["list"]:
+                            if "title" in item:
+                                text_parts.append(f"• {item['title']}")
+                            if "snippet" in item:
+                                text_parts.append(f"  {item['snippet']}")
+                
+                ai_overview_info["ai_overview_text"] = " ".join(text_parts)
+                
+                # DEBUG
+                if query:
+                    st.write(f"  - Text blocks trovati: {len(text_parts)} parti di testo")
+            
+            # Estrai references (fonti) e controlla il proprio sito
+            if "references" in ai_data:
+                # DEBUG
+                if query:
+                    st.write(f"  - References trovati: {len(ai_data['references'])} fonti")
+                    
+                for i, ref in enumerate(ai_data["references"]):
+                    source_info = {
+                        "title": ref.get("title", ""),
+                        "link": ref.get("link", ""),
+                        "domain": urlparse(ref.get("link", "")).netloc if ref.get("link") else "",
+                        "source": ref.get("source", ""),
+                        "snippet": ref.get("snippet", ""),
+                        "position": i + 1
+                    }
+                    ai_overview_info["ai_sources"].append(source_info)
+                    if source_info["domain"]:
+                        ai_overview_info["ai_source_domains"].append(source_info["domain"])
+                    
+                    # Controlla se il proprio sito è presente
+                    if self.own_site_domain and self.own_site_domain in source_info["domain"]:
+                        ai_overview_info["own_site_in_ai"] = True
+                        if ai_overview_info["own_site_ai_position"] is None:
+                            ai_overview_info["own_site_ai_position"] = i + 1
+            else:
+                # DEBUG
+                if query:
+                    st.write(f"  - ⚠️ Nessun 'references' trovato nell'AI Overview")
+                    
+            # DEBUG: Se non ci sono fonti ma c'è AI Overview
+            if query and ai_overview_info["has_ai_overview"] and len(ai_overview_info["ai_sources"]) == 0:
+                st.write(f"  - ⚠️ PROBLEMA: AI Overview presente ma nessuna fonte trovata")
+                st.write(f"  - Struttura completa ai_data (prime 500 char): {str(ai_data)[:500]}")
+        
+        # Fallback: cerca in answer_box come AI Overview alternativo
+        if not ai_overview_info["has_ai_overview"] and "answer_box" in data:
+            answer_box = data["answer_box"]
+            if isinstance(answer_box, dict):
+                # DEBUG
+                if query:
+                    st.write(f"  - AI Overview trovato in answer_box")
+                    
+                ai_overview_info["has_ai_overview"] = True
+                ai_overview_info["ai_overview_text"] = str(answer_box.get("snippet", answer_box.get("answer", "")))
+                
+                if "link" in answer_box:
+                    source_info = {
+                        "title": answer_box.get("title", ""),
+                        "link": answer_box.get("link", ""),
+                        "domain": urlparse(answer_box.get("link", "")).netloc if answer_box.get("link") else "",
+                        "position": 1
+                    }
+                    ai_overview_info["ai_sources"].append(source_info)
+                    if source_info["domain"]:
+                        ai_overview_info["ai_source_domains"].append(source_info["domain"])
+                    
+                    # Controlla il proprio sito
+                    if self.own_site_domain and self.own_site_domain in source_info["domain"]:
+                        ai_overview_info["own_site_in_ai"] = True
+                        ai_overview_info["own_site_ai_position"] = 1
+        
+        return ai_overview_info
 
     def analyze_ai_overview_pages(self, ai_overview_info, query):
         """Analizza le pagine presenti in AI Overview"""
@@ -1404,7 +1404,7 @@ def main():
     # Opzioni per analisi avanzate
     enable_ai_overview_analysis = st.sidebar.checkbox(
         "Analizza pagine in AI Overview",
-        value=True,
+        value=False,
         help="Analizza il contenuto delle pagine che appaiono in AI Overview"
     )
     
@@ -1440,9 +1440,9 @@ def main():
         )
     
     with col2:
-        st.markdown("### 💡 Funzionalità Nuove")
+        st.markdown("### 💡 Funzionalità")
         st.info("""
-        ✨ **Novità v2.0:**
+        ✨ **Versione Debug:**
         • 🏠 Tracking del tuo sito
         • 🤖 Analisi AI Overview  
         • 📊 Dati strutturati SERP
@@ -1450,14 +1450,14 @@ def main():
         • 📈 Grafici Excel integrati
         • 🎯 Report keyword unificato
         • 🏗️ Cluster personalizzati
-        • 🔗 Supporto page_token per AI Overview completi
+        • 🔗 Debug page_token attivato
         """)
 
     # Mostra risultati se l'analisi è stata completata
     if st.session_state.analysis_complete and st.session_state.analysis_data:
         display_results(st.session_state.analysis_data)
     
-    if st.button("🚀 Avvia Analisi Avanzata", type="primary", use_container_width=True):
+    if st.button("🚀 Avvia Analisi con Debug", type="primary", use_container_width=True):
         if use_ai_classification and (not serpapi_key or not openai_api_key):
             st.error("⚠️ Inserisci entrambe le API keys per l'analisi AI!")
             return
@@ -1494,7 +1494,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>🚀 SERP Analyzer Plus Ultra - Sviluppato da Daniele e il suo amico Claude 🦕</p>
+        <p>🚀 SERP Analyzer Plus Ultra (Debug Mode) - Sviluppato da Daniele e il suo amico Claude 🦕</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1570,6 +1570,9 @@ def run_analysis(queries, serpapi_key, openai_api_key, own_site_domain,
 
     progress_bar = st.progress(0)
     status_text = st.empty()
+
+    st.markdown("---")
+    st.subheader("📋 Log di Debug")
 
     for i, query in enumerate(queries):
         status_text.text(f"🔍 Analizzando: {query} ({i+1}/{len(queries)})")
