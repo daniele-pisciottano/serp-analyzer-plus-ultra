@@ -116,15 +116,11 @@ class EnhancedSERPAnalyzer:
             st.error(f"Errore di connessione: {e}")
             return None
 
-    def fetch_ai_overview_with_token(self, query, page_token, country="it", language="it"):
-        """Recupera AI Overview completo usando il page_token"""
+    def fetch_with_page_token(self, page_token):
+        """Recupera contenuto usando solo il page_token"""
         params = {
             "api_key": self.serpapi_key,
             "engine": "google",
-            "q": query,
-            "gl": country,
-            "hl": language,
-            "google_domain": "google.it" if country == "it" else "google.com",
             "page_token": page_token
         }
         
@@ -367,6 +363,40 @@ Rispondi solo con la categoria."""
             st.warning(f"Errore OpenAI: {e}")
             return "Altro"
 
+    def extract_ai_overview_data(self, ai_data):
+        """Estrae text_blocks e references da ai_data in modo più robusto"""
+        text_parts = []
+        sources = []
+        
+        # Estrai text_blocks
+        if "text_blocks" in ai_data:
+            for block in ai_data["text_blocks"]:
+                if "snippet" in block:
+                    text_parts.append(block["snippet"])
+                
+                # Se è una lista, estrai anche gli elementi
+                if block.get("type") == "list" and "list" in block:
+                    for item in block["list"]:
+                        if "title" in item:
+                            text_parts.append(f"• {item['title']}")
+                        if "snippet" in item:
+                            text_parts.append(f"  {item['snippet']}")
+        
+        # Estrai references
+        if "references" in ai_data:
+            for i, ref in enumerate(ai_data["references"]):
+                source_info = {
+                    "title": ref.get("title", ""),
+                    "link": ref.get("link", ""),
+                    "domain": urlparse(ref.get("link", "")).netloc if ref.get("link") else "",
+                    "source": ref.get("source", ""),
+                    "snippet": ref.get("snippet", ""),
+                    "position": i + 1
+                }
+                sources.append(source_info)
+        
+        return text_parts, sources
+
     def parse_ai_overview(self, data, query=None, country="it", language="it"):
         """Estrae informazioni dall'AI Overview seguendo i page_token fino ai dati finali"""
         ai_overview_info = {
@@ -384,75 +414,71 @@ Rispondi solo con la categoria."""
             ai_data = data["ai_overview"]
             ai_overview_info["has_ai_overview"] = True
             
-            # Se ci sono già text_blocks o references, usa quelli
-            if "text_blocks" in ai_data or "references" in ai_data:
-                # Abbiamo i dati, processiamoli
-                pass
-            # Altrimenti, se c'è un page_token, segui la catena
-            elif "page_token" in ai_data and query:
-                max_attempts = 10  # Limite di sicurezza
+            # Prova a estrarre i dati direttamente
+            text_parts, sources = self.extract_ai_overview_data(ai_data)
+            
+            # Se non ci sono dati ma c'è un page_token, segui la catena
+            if not text_parts and not sources and "page_token" in ai_data and query:
+                max_attempts = 10
                 attempts = 0
+                current_token = ai_data["page_token"]
                 
-                while "page_token" in ai_data and attempts < max_attempts:
+                while current_token and attempts < max_attempts:
                     attempts += 1
-                    page_token = ai_data["page_token"]
                     
-                    # Fai richiesta con page_token
-                    full_data = self.fetch_ai_overview_with_token(
-                        query, 
-                        page_token, 
-                        country, 
-                        language
-                    )
+                    # Fai richiesta con solo il page_token
+                    response_data = self.fetch_with_page_token(current_token)
                     
-                    if full_data and "ai_overview" in full_data:
-                        ai_data = full_data["ai_overview"]
+                    if response_data:
+                        # Cerca i dati in varie posizioni possibili
                         
-                        # Se ora abbiamo i dati, esci dal loop
-                        if "text_blocks" in ai_data or "references" in ai_data:
+                        # Prima controlla se c'è ai_overview nella risposta
+                        if "ai_overview" in response_data:
+                            new_ai_data = response_data["ai_overview"]
+                            new_text_parts, new_sources = self.extract_ai_overview_data(new_ai_data)
+                            
+                            if new_text_parts or new_sources:
+                                # Trovati i dati!
+                                text_parts = new_text_parts
+                                sources = new_sources
+                                break
+                            
+                            # Se c'è ancora un page_token, continua
+                            if "page_token" in new_ai_data:
+                                current_token = new_ai_data["page_token"]
+                            else:
+                                break
+                        
+                        # Se non c'è ai_overview, controlla direttamente nella risposta
+                        elif "text_blocks" in response_data or "references" in response_data:
+                            text_parts, sources = self.extract_ai_overview_data(response_data)
+                            if text_parts or sources:
+                                break
+                        
+                        # Se c'è un page_token direttamente nella risposta
+                        elif "page_token" in response_data:
+                            current_token = response_data["page_token"]
+                        else:
+                            # Non ci sono più dati da seguire
                             break
                     else:
-                        # Errore nella richiesta, esci
                         break
             
-            # Ora processiamo i dati (se li abbiamo)
-            # Estrai testo dai text_blocks
-            if "text_blocks" in ai_data:
-                text_parts = []
-                for block in ai_data["text_blocks"]:
-                    if "snippet" in block:
-                        text_parts.append(block["snippet"])
-                    
-                    # Se è una lista, estrai anche gli elementi
-                    if block.get("type") == "list" and "list" in block:
-                        for item in block["list"]:
-                            if "title" in item:
-                                text_parts.append(f"• {item['title']}")
-                            if "snippet" in item:
-                                text_parts.append(f"  {item['snippet']}")
-                
+            # Popola i risultati finali
+            if text_parts:
                 ai_overview_info["ai_overview_text"] = " ".join(text_parts)
             
-            # Estrai references (fonti)
-            if "references" in ai_data:
-                for i, ref in enumerate(ai_data["references"]):
-                    source_info = {
-                        "title": ref.get("title", ""),
-                        "link": ref.get("link", ""),
-                        "domain": urlparse(ref.get("link", "")).netloc if ref.get("link") else "",
-                        "source": ref.get("source", ""),
-                        "snippet": ref.get("snippet", ""),
-                        "position": i + 1
-                    }
-                    ai_overview_info["ai_sources"].append(source_info)
-                    if source_info["domain"]:
-                        ai_overview_info["ai_source_domains"].append(source_info["domain"])
+            if sources:
+                ai_overview_info["ai_sources"] = sources
+                for source in sources:
+                    if source["domain"]:
+                        ai_overview_info["ai_source_domains"].append(source["domain"])
                     
                     # Controlla se il proprio sito è presente
-                    if self.own_site_domain and self.own_site_domain in source_info["domain"]:
+                    if self.own_site_domain and self.own_site_domain in source["domain"]:
                         ai_overview_info["own_site_in_ai"] = True
                         if ai_overview_info["own_site_ai_position"] is None:
-                            ai_overview_info["own_site_ai_position"] = i + 1
+                            ai_overview_info["own_site_ai_position"] = source["position"]
         
         # Fallback: cerca in answer_box come AI Overview alternativo
         if not ai_overview_info["has_ai_overview"] and "answer_box" in data:
@@ -1411,9 +1437,9 @@ def main():
     with col2:
         st.markdown("### 💡 Funzionalità")
         st.info("""
-        ✨ **Versione 2.1:**
+        ✨ **Versione 2.2 Fixed:**
         • 🏠 Tracking del tuo sito
-        • 🤖 AI Overview completi con loop page_token
+        • 🤖 AI Overview completi (fix page_token)
         • 📊 Dati strutturati SERP
         • 🔍 Suggerimenti AI per ottimizzazione
         • 📈 Grafici Excel integrati
