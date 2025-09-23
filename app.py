@@ -94,7 +94,7 @@ class EnhancedSERPAnalyzer:
         }
 
     def fetch_serp_results(self, query, country="it", language="it", num_results=10):
-        """Effettua la ricerca SERP tramite SERPApi"""
+        """Effettua la ricerca SERP tramite SERPApi con parametri ottimizzati"""
         params = {
             "api_key": self.serpapi_key,
             "engine": "google",
@@ -102,7 +102,9 @@ class EnhancedSERPAnalyzer:
             "num": num_results,
             "gl": country,
             "hl": language,
-            "google_domain": "google.it" if country == "it" else "google.com"
+            "google_domain": "google.it" if country == "it" else "google.com",
+            "no_cache": True,  # Aggiunto per evitare risultati cached
+            "device": "desktop"  # Desktop ha più probabilità di AI Overview
         }
         
         try:
@@ -116,12 +118,13 @@ class EnhancedSERPAnalyzer:
             st.error(f"Errore di connessione: {e}")
             return None
 
-    def fetch_with_page_token(self, page_token):
-        """Recupera contenuto usando solo il page_token"""
+    def fetch_ai_overview_with_token(self, page_token):
+        """Recupera AI Overview completo usando il page_token con l'engine corretto"""
         params = {
             "api_key": self.serpapi_key,
-            "engine": "google",
-            "page_token": page_token
+            "engine": "google_ai_overview",  # CRITICO: engine specifico per AI Overview
+            "page_token": page_token,
+            "no_cache": True  # CRITICO: evita token scaduti dalla cache
         }
         
         try:
@@ -398,7 +401,7 @@ Rispondi solo con la categoria."""
         return text_parts, sources
 
     def parse_ai_overview(self, data, query=None, country="it", language="it"):
-        """Estrae informazioni dall'AI Overview seguendo i page_token fino ai dati finali"""
+        """Estrae informazioni dall'AI Overview con gestione completa dei page_token"""
         ai_overview_info = {
             "has_ai_overview": False,
             "ai_overview_text": "",
@@ -414,55 +417,90 @@ Rispondi solo con la categoria."""
             ai_data = data["ai_overview"]
             ai_overview_info["has_ai_overview"] = True
             
-            # Prova a estrarre i dati direttamente
+            # Prima prova a estrarre i dati direttamente
             text_parts, sources = self.extract_ai_overview_data(ai_data)
             
-            # Se non ci sono dati ma c'è un page_token, segui la catena
+            # Se non ci sono dati ma c'è un page_token, usa l'engine corretto
             if not text_parts and not sources and "page_token" in ai_data and query:
-                max_attempts = 10
+                max_attempts = 5
                 attempts = 0
                 current_token = ai_data["page_token"]
                 
                 while current_token and attempts < max_attempts:
                     attempts += 1
                     
-                    # Fai richiesta con solo il page_token
-                    response_data = self.fetch_with_page_token(current_token)
+                    # USA L'ENGINE CORRETTO google_ai_overview
+                    full_data = self.fetch_ai_overview_with_token(current_token)
                     
-                    if response_data:
-                        # Cerca i dati in varie posizioni possibili
-                        
-                        # Prima controlla se c'è ai_overview nella risposta
-                        if "ai_overview" in response_data:
-                            new_ai_data = response_data["ai_overview"]
-                            new_text_parts, new_sources = self.extract_ai_overview_data(new_ai_data)
-                            
-                            if new_text_parts or new_sources:
-                                # Trovati i dati!
-                                text_parts = new_text_parts
-                                sources = new_sources
-                                break
-                            
-                            # Se c'è ancora un page_token, continua
-                            if "page_token" in new_ai_data:
-                                current_token = new_ai_data["page_token"]
-                            else:
-                                break
-                        
-                        # Se non c'è ai_overview, controlla direttamente nella risposta
-                        elif "text_blocks" in response_data or "references" in response_data:
-                            text_parts, sources = self.extract_ai_overview_data(response_data)
-                            if text_parts or sources:
-                                break
-                        
-                        # Se c'è un page_token direttamente nella risposta
-                        elif "page_token" in response_data:
-                            current_token = response_data["page_token"]
+                    if full_data:
+                        # I dati potrebbero essere direttamente nella risposta
+                        if "ai_overview" in full_data:
+                            new_ai_data = full_data["ai_overview"]
                         else:
-                            # Non ci sono più dati da seguire
+                            # O direttamente nel root della risposta
+                            new_ai_data = full_data
+                        
+                        # Estrai i dati
+                        new_text_parts, new_sources = self.extract_ai_overview_data(new_ai_data)
+                        
+                        if new_text_parts or new_sources:
+                            # Dati trovati!
+                            text_parts = new_text_parts
+                            sources = new_sources
+                            break
+                        
+                        # Controlla se c'è un altro page_token
+                        if "page_token" in new_ai_data and new_ai_data["page_token"] != current_token:
+                            current_token = new_ai_data["page_token"]
+                        else:
                             break
                     else:
-                        break
+                        # Se fallisce, aspetta un attimo e riprova
+                        time.sleep(0.5)
+            
+            # Se ancora non ci sono dati, prova con query variations
+            if not text_parts and not sources and query:
+                # Prova a rifare la query con variazioni per attivare AI Overview
+                variations = [
+                    f"cos'è {query}",
+                    f"cosa significa {query}",
+                    f"{query} spiegazione"
+                ]
+                
+                for variation in variations[:1]:  # Prova solo una variazione per non rallentare troppo
+                    retry_params = {
+                        "api_key": self.serpapi_key,
+                        "engine": "google",
+                        "q": variation,
+                        "gl": country,
+                        "hl": language,
+                        "no_cache": True,
+                        "num": 10,
+                        "device": "desktop"
+                    }
+                    
+                    try:
+                        retry_response = requests.get(self.serpapi_url, params=retry_params)
+                        if retry_response.status_code == 200:
+                            retry_data = retry_response.json()
+                            if "ai_overview" in retry_data:
+                                retry_ai_data = retry_data["ai_overview"]
+                                text_parts, sources = self.extract_ai_overview_data(retry_ai_data)
+                                if text_parts or sources:
+                                    break
+                                
+                                # Se c'è un page_token nella retry, seguilo
+                                if "page_token" in retry_ai_data:
+                                    full_retry = self.fetch_ai_overview_with_token(retry_ai_data["page_token"])
+                                    if full_retry:
+                                        if "ai_overview" in full_retry:
+                                            text_parts, sources = self.extract_ai_overview_data(full_retry["ai_overview"])
+                                        else:
+                                            text_parts, sources = self.extract_ai_overview_data(full_retry)
+                                        if text_parts or sources:
+                                            break
+                    except:
+                        pass
             
             # Popola i risultati finali
             if text_parts:
@@ -1437,14 +1475,15 @@ def main():
     with col2:
         st.markdown("### 💡 Funzionalità")
         st.info("""
-        ✨ **Versione 2.2 Fixed:**
+        ✨ **Versione 3.0 Fixed:**
         • 🏠 Tracking del tuo sito
-        • 🤖 AI Overview completi (fix page_token)
+        • 🤖 AI Overview FUNZIONANTI
         • 📊 Dati strutturati SERP
         • 🔍 Suggerimenti AI per ottimizzazione
         • 📈 Grafici Excel integrati
         • 🎯 Report keyword unificato
         • 🏗️ Cluster personalizzati
+        • ✅ Engine corretto per page_token
         """)
 
     # Mostra risultati se l'analisi è stata completata
