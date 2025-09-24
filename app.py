@@ -93,6 +93,31 @@ class EnhancedSERPAnalyzer:
             'Connection': 'keep-alive',
         }
 
+    def clean_text_for_api(self, text):
+        """Pulisce il testo rimuovendo caratteri problematici per l'API"""
+        if not text:
+            return text
+        
+        # Converti in stringa se non lo è già
+        text = str(text)
+        
+        # Rimuove caratteri di controllo Unicode problematici
+        # \u2028 = Line Separator, \u2029 = Paragraph Separator
+        text = text.replace('\u2028', '\n').replace('\u2029', '\n\n')
+        
+        # Rimuove altri caratteri di controllo (0x00-0x1F) eccetto tab, newline, carriage return
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+        
+        # Assicura che sia una stringa UTF-8 valida
+        if isinstance(text, bytes):
+            text = text.decode('utf-8', errors='ignore')
+        
+        # Normalizza spazi multipli
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        
+        return text
+
     def fetch_serp_results(self, query, country="it", language="it", num_results=10):
         """Effettua la ricerca SERP tramite SERPApi con parametri ottimizzati"""
         params = {
@@ -232,6 +257,8 @@ class EnhancedSERPAnalyzer:
                 script.decompose()
             
             text_content = soup.get_text()
+            # Pulisci il contenuto prima di limitarlo
+            text_content = self.clean_text_for_api(text_content)
             # Limita il contenuto per evitare token limits
             text_content = text_content[:4000]
             
@@ -239,13 +266,15 @@ class EnhancedSERPAnalyzer:
             headings = []
             for i in range(1, 7):
                 for heading in soup.find_all(f'h{i}'):
-                    headings.append(f"H{i}: {heading.get_text().strip()}")
+                    heading_text = self.clean_text_for_api(heading.get_text().strip())
+                    if heading_text:
+                        headings.append(f"H{i}: {heading_text}")
             
             # Estrai informazioni su immagini
             images = soup.find_all('img')
             image_info = []
             for img in images[:5]:  # Prime 5 immagini
-                alt_text = img.get('alt', 'No alt text')
+                alt_text = self.clean_text_for_api(img.get('alt', 'No alt text'))
                 src = img.get('src', 'No src')
                 image_info.append(f"Immagine: {alt_text} (src: {src})")
             
@@ -254,9 +283,13 @@ class EnhancedSERPAnalyzer:
             internal_links = len([link for link in links if urlparse(url).netloc in link.get('href', '')])
             external_links = len(links) - internal_links
             
-            prompt = f"""Analizza questa pagina che appare in AI Overview per la query "{query}" e fornisci insights sul perché potrebbe essere ben posizionata.
+            # Pulisci query e URL
+            clean_query = self.clean_text_for_api(query)
+            clean_url = self.clean_text_for_api(url)
+            
+            prompt = f"""Analizza questa pagina che appare in AI Overview per la query "{clean_query}" e fornisci insights sul perché potrebbe essere ben posizionata.
 
-URL: {url}
+URL: {clean_url}
 
 HEADINGS:
 {chr(10).join(headings[:10])}
@@ -340,11 +373,15 @@ Mantieni l'analisi concisa ma dettagliata (max 500 parole)."""
         if cache_key in self.classification_cache:
             return self.classification_cache[cache_key]
         
+        # Pulisci i testi prima di inviarli all'API
+        clean_url = self.clean_text_for_api(url)
+        clean_title = self.clean_text_for_api(title)
+        
         # Prompt ottimizzato per velocità
         prompt = f"""Classifica SOLO con una di queste categorie:
         
-URL: {url}
-Titolo: {title}
+URL: {clean_url}
+Titolo: {clean_title}
 
 Categorie: Homepage, Pagina di Categoria, Pagina Prodotto, Articolo di Blog, Pagina di Servizi, Altro
 
@@ -745,16 +782,20 @@ Rispondi solo con la categoria."""
         for i in range(0, len(keywords), batch_size):
             batch_keywords = keywords[i:i+batch_size]
             
+            # Pulisci le keyword e i cluster
+            clean_keywords = [self.clean_text_for_api(kw) for kw in batch_keywords]
+            clean_custom_clusters = [self.clean_text_for_api(c) for c in custom_clusters]
+            
             prompt = f"""Ruolo: Esperto di analisi semantica e architettura siti web
 Capacità: Specialista in clustering di keyword basato su strutture di siti web esistenti.
 
 Compito: Assegna ogni keyword al cluster più appropriato, dando PRIORITÀ ai cluster predefiniti del sito.
 
 CLUSTER PREDEFINITI (USA QUESTI COME PRIORITÀ):
-{chr(10).join([f"- {cluster}" for cluster in custom_clusters])}
+{chr(10).join([f"- {cluster}" for cluster in clean_custom_clusters])}
 
 Keyword da classificare:
-{chr(10).join([f"- {kw}" for kw in batch_keywords])}
+{chr(10).join([f"- {kw}" for kw in clean_keywords])}
 
 Istruzioni:
 1. PRIORITÀ ASSOLUTA: Cerca di assegnare ogni keyword a uno dei cluster predefiniti se semanticamente correlata
@@ -891,13 +932,16 @@ Cluster: [Altro Cluster]
         for i in range(0, len(keywords), batch_size):
             batch_keywords = keywords[i:i+batch_size]
             
+            # Pulisci le keyword
+            clean_keywords = [self.clean_text_for_api(kw) for kw in batch_keywords]
+            
             prompt = f"""Ruolo: Esperto di analisi semantica
 Capacità: Possiedi competenze approfondite in linguistica computazionale, analisi semantica e clustering di parole chiave.
 
 Compito: Clusterizza il seguente elenco di keyword raggruppando quelle appartenenti allo stesso gruppo semantico. Ogni cluster deve contenere ALMENO 5 keyword per essere valido.
 
 Elenco keyword da analizzare:
-{chr(10).join([f"- {kw}" for kw in batch_keywords])}
+{chr(10).join([f"- {kw}" for kw in clean_keywords])}
 
 Istruzioni:
 1. Raggruppa le keyword per similarità semantica, significato e contesto d'uso
@@ -1483,7 +1527,7 @@ def main():
         • 📈 Grafici Excel integrati
         • 🎯 Report keyword unificato
         • 🏗️ Cluster personalizzati
-        • ✅ Engine corretto per page_token
+        • ✅ Fix errori encoding Unicode
         """)
 
     # Mostra risultati se l'analisi è stata completata
