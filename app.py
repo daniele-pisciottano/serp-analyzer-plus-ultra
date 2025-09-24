@@ -1519,15 +1519,12 @@ def main():
     with col2:
         st.markdown("### 💡 Funzionalità")
         st.info("""
-        ✨ **Versione 3.0 Fixed:**
         • 🏠 Tracking del tuo sito
-        • 🤖 AI Overview FUNZIONANTI
-        • 📊 Dati strutturati SERP
+        • 🤖 AI Overview
+        • 📊 Dati strutturati in SERP
         • 🔍 Suggerimenti AI per ottimizzazione
         • 📈 Grafici Excel integrati
-        • 🎯 Report keyword unificato
         • 🏗️ Cluster personalizzati
-        • ✅ Fix errori encoding Unicode
         """)
 
     # Mostra risultati se l'analisi è stata completata
